@@ -1,0 +1,51 @@
+# Non-sensitive runtime configuration.
+# SDWAN_PASSWORD and any auth client secrets belong in a Secret —
+# see secret.example.yaml.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mcp-server-config
+data:
+  MCP_SERVER_NAME: cisco-sdwan-mcp
+  MCP_TRANSPORT: http
+  MCP_HOST: 0.0.0.0
+  MCP_PORT: "8000"
+  LOG_LEVEL: INFO
+
+  # Required whenever replicas > 1. A streamable-HTTP session lives in one
+  # pod's memory, so a client that initializes against pod A and is then
+  # load-balanced to pod B gets "Session not found" (HTTP 404) on roughly half
+  # its calls. Stateless mode handles each request independently, so any
+  # replica can serve any request.
+  #
+  # The trade-off: no GET/SSE stream, so the server cannot push notifications
+  # or sampling requests to the client. Every tool here is request/response,
+  # so nothing is lost. If you add a tool that needs server-initiated
+  # messages, drop this to "false" and either run a single replica or add
+  # session affinity keyed on the mcp-session-id header.
+  FASTMCP_STATELESS_HTTP: "true"
+
+  # --- Cisco Catalyst SD-WAN Manager (vManage) ---
+  SDWAN_VMANAGE_URL: https://vmanage.example.com:8443
+  SDWAN_USERNAME: automation-readonly
+  SDWAN_TIMEOUT: "60"
+  SDWAN_PAGE_SIZE: "100"
+
+  # Leave verification on. For a controller with a private CA, mount the CA
+  # into the pod and point SDWAN_CA_BUNDLE at it rather than disabling this.
+  SDWAN_VERIFY_SSL: "true"
+  # SDWAN_CA_BUNDLE: /etc/sdwan-ca/vmanage-ca.pem
+
+  # "false" keeps the server read-only: the configuration-changing tools are
+  # never registered, so a client cannot call them at all. Flip to "true" only
+  # for a deployment meant to change configuration, and pair it with a vManage
+  # account that actually holds write privileges.
+  SDWAN_ENABLE_WRITES: "false"
+
+  # --- Authentication of MCP clients to this server ---
+  # See README → Authentication for all modes and their variables.
+  MCP_AUTH: none
+  # MCP_AUTH_JWKS_URI: https://idp.example.com/realms/main/protocol/openid-connect/certs
+  # MCP_AUTH_ISSUER: https://idp.example.com/realms/main
+  # MCP_AUTH_AUDIENCE: cisco-sdwan-mcp
+  # MCP_AUTH_REQUIRED_SCOPES: mcp:read,mcp:write

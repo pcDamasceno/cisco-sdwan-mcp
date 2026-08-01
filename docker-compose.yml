@@ -1,0 +1,91 @@
+---
+# yamllint disable rule:line-length
+#
+# Docker Compose deployment for the Cisco Catalyst SD-WAN MCP Server.
+# Builds the image from the Dockerfile in this repository.
+#
+# Quick start:
+#   cp .env.example .env   # fill in your vManage URL and credentials
+#   docker compose up -d --build
+# The MCP endpoint is then available at http://localhost:8000/mcp.
+#
+# To run a published image instead of building, replace the build: block with:
+#   image: ghcr.io/OWNER/REPO:latest
+# — see .github/workflows/build-push-ghcr.yaml for what the CI pipeline pushes.
+#
+# Every value below is interpolated from .env (or the shell), so .env stays the
+# single place credentials live — they are never written into this file.
+#
+
+x-sdwan-mcp-config: &sdwan_mcp_config
+  # --- Cisco Catalyst SD-WAN Manager (vManage) — REQUIRED ---
+  # SDWAN_VMANAGE_URL takes precedence over SDWAN_VMANAGE_HOST/PORT.
+  SDWAN_VMANAGE_URL: ${SDWAN_VMANAGE_URL:-}
+  SDWAN_VMANAGE_HOST: ${SDWAN_VMANAGE_HOST:-}
+  SDWAN_VMANAGE_PORT: ${SDWAN_VMANAGE_PORT:-}
+  SDWAN_USERNAME: ${SDWAN_USERNAME:?set SDWAN_USERNAME in .env}
+  SDWAN_PASSWORD: ${SDWAN_PASSWORD:?set SDWAN_PASSWORD in .env}
+  # Leave verification on. For a controller with a private CA, mount the CA
+  # (see volumes below) and point SDWAN_CA_BUNDLE at it rather than disabling this.
+  SDWAN_VERIFY_SSL: ${SDWAN_VERIFY_SSL:-true}
+  SDWAN_CA_BUNDLE: ${SDWAN_CA_BUNDLE:-}
+  SDWAN_TIMEOUT: ${SDWAN_TIMEOUT:-60}
+  SDWAN_PAGE_SIZE: ${SDWAN_PAGE_SIZE:-100}
+  # "false" keeps the server read-only: the configuration-changing tools are
+  # never registered, so a client cannot call them at all. "true" registers them —
+  # each still requires explicit user approval on every call.
+  SDWAN_ENABLE_WRITES: ${SDWAN_ENABLE_WRITES:-false}
+
+  # --- Server ---
+  MCP_SERVER_NAME: ${MCP_SERVER_NAME:-cisco-sdwan-mcp}
+  MCP_TRANSPORT: ${MCP_TRANSPORT:-http}
+  MCP_HOST: ${MCP_HOST:-0.0.0.0}
+  MCP_PORT: ${MCP_PORT:-8000}
+  LOG_LEVEL: ${LOG_LEVEL:-INFO}
+
+  # --- Authentication of MCP clients to THIS server (HTTP transport only) ---
+  # Unrelated to SDWAN_USERNAME/SDWAN_PASSWORD, which authenticate this server to
+  # vManage. Modes: none | static | jwt | introspection | oauth-proxy |
+  #                 github | google | azure | auth0 | workos
+  # See .env.example / README → Authentication for each mode's variables.
+  MCP_AUTH: ${MCP_AUTH:-none}
+  MCP_AUTH_REQUIRED_SCOPES: ${MCP_AUTH_REQUIRED_SCOPES:-}
+  MCP_AUTH_STATIC_TOKENS: ${MCP_AUTH_STATIC_TOKENS:-}
+  MCP_AUTH_JWKS_URI: ${MCP_AUTH_JWKS_URI:-}
+  MCP_AUTH_PUBLIC_KEY: ${MCP_AUTH_PUBLIC_KEY:-}
+  MCP_AUTH_ISSUER: ${MCP_AUTH_ISSUER:-}
+  MCP_AUTH_AUDIENCE: ${MCP_AUTH_AUDIENCE:-}
+  MCP_AUTH_ALGORITHM: ${MCP_AUTH_ALGORITHM:-}
+  MCP_AUTH_INTROSPECTION_URL: ${MCP_AUTH_INTROSPECTION_URL:-}
+  MCP_AUTH_CLIENT_ID: ${MCP_AUTH_CLIENT_ID:-}
+  MCP_AUTH_CLIENT_SECRET: ${MCP_AUTH_CLIENT_SECRET:-}
+  MCP_AUTH_BASE_URL: ${MCP_AUTH_BASE_URL:-}
+  MCP_AUTH_UPSTREAM_AUTHORIZATION_ENDPOINT: ${MCP_AUTH_UPSTREAM_AUTHORIZATION_ENDPOINT:-}
+  MCP_AUTH_UPSTREAM_TOKEN_ENDPOINT: ${MCP_AUTH_UPSTREAM_TOKEN_ENDPOINT:-}
+  MCP_AUTH_AZURE_TENANT_ID: ${MCP_AUTH_AZURE_TENANT_ID:-}
+  MCP_AUTH_AUTH0_CONFIG_URL: ${MCP_AUTH_AUTH0_CONFIG_URL:-}
+  MCP_AUTH_AUTHKIT_DOMAIN: ${MCP_AUTH_AUTHKIT_DOMAIN:-}
+
+services:
+  sdwan-mcp:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "${MCP_PORT:-8000}:8000"
+    environment:
+      <<: [*sdwan_mcp_config]
+      # The image listens on 8000 inside the container regardless of the host
+      # port chosen above.
+      MCP_PORT: "8000"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz')\""]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    # Controller with a private CA: mount it and set SDWAN_CA_BUNDLE to the
+    # mounted path, e.g. /app/certificates/vmanage-ca.pem
+    # volumes:
+    #   - ./certificates:/app/certificates:ro

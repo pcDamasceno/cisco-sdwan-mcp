@@ -1,0 +1,128 @@
+name: Helm chart
+
+# The Styrmin driver pins `spec.helm.main.version` to the chart version, and
+# Flux pulls the chart from an OCI registry — a chart committed to this
+# repository is not something Styrmin can deploy. This workflow is what turns
+# deploy/helm/cisco-sdwan-mcp/ into something the driver can reference.
+
+# Deliberately not triggered by v* tags: the chart is versioned independently of
+# the application. A new application release needs no chart release — the driver
+# passes the selected version through as the image tag, and the chart's own
+# appVersion is only a fallback for a bare `helm install`.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "deploy/helm/**"
+      - ".github/workflows/publish-chart.yaml"
+  pull_request:
+    paths:
+      - "deploy/helm/**"
+      - "driver.styrmin.yml"
+      - "values.j2.yml"
+      - ".github/workflows/publish-chart.yaml"
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Overwrite the chart version if it is already published"
+        type: boolean
+        default: false
+
+env:
+  CHART_DIR: deploy/helm/cisco-sdwan-mcp
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/setup-helm@v4
+
+      - name: Lint
+        run: helm lint "$CHART_DIR"
+
+      - name: Render with chart defaults
+        run: helm template ci "$CHART_DIR" > /dev/null
+
+      - name: Render with the values the Styrmin driver produces
+        # Guards the chart <-> driver contract: every value values.j2.yml sets
+        # has to still be one the chart understands.
+        run: helm template ci "$CHART_DIR" -f "$CHART_DIR/ci/styrmin-values.yaml" > /dev/null
+
+      - name: Check the driver pins the chart version being built
+        run: |
+          set -euo pipefail
+          chart_version=$(grep -E '^version:' "$CHART_DIR/Chart.yaml" | awk '{print $2}')
+          driver_version=$(awk '/^  helm:/{h=1} h && /^      version:/{gsub(/["[:space:]]/,"",$2); print $2; exit}' driver.styrmin.yml)
+          echo "chart=$chart_version driver pins=$driver_version"
+          if [ "$chart_version" != "$driver_version" ]; then
+            echo "::error::driver.styrmin.yml pins chart version $driver_version but the chart is $chart_version — bump both together"
+            exit 1
+          fi
+
+  publish:
+    # Publishing a chart version that deployments already pin would silently
+    # change what they resolve to, so pull requests only lint.
+    if: github.event_name != 'pull_request'
+    needs: lint
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/setup-helm@v4
+
+      - name: Resolve registry path
+        id: registry
+        # GHCR paths must be lowercase; the repository owner is not guaranteed
+        # to be.
+        run: |
+          set -euo pipefail
+          version=$(grep -E '^version:' "$CHART_DIR/Chart.yaml" | awk '{print $2}')
+          echo "repo=oci://ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/charts" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GHCR
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" \
+            | helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Skip if this version is already published
+        # Chart versions are immutable: Styrmin deployments pin
+        # spec.helm.main.version, so overwriting one changes what they resolve
+        # to without anything recording that it happened.
+        if: inputs.force != true
+        run: |
+          set -euo pipefail
+          version="${{ steps.registry.outputs.version }}"
+          repo="${{ steps.registry.outputs.repo }}"
+          if helm show chart "$repo/cisco-sdwan-mcp" --version "$version" > /dev/null 2>&1; then
+            echo "::notice::chart $version is already published — bump version in $CHART_DIR/Chart.yaml (and the driver's spec.helm.main.version) to release a change"
+            echo "skip=true" >> "$GITHUB_ENV"
+          fi
+
+      - name: Package and push
+        if: env.skip != 'true'
+        run: |
+          set -euo pipefail
+          helm package "$CHART_DIR" --destination dist
+          helm push dist/cisco-sdwan-mcp-*.tgz "${{ steps.registry.outputs.repo }}"
+
+      - name: Summary
+        run: |
+          {
+            if [ "${skip:-}" = "true" ]; then
+              echo "### Chart already published — nothing pushed"
+            else
+              echo "### Chart published"
+            fi
+            echo
+            echo '```'
+            echo "${{ steps.registry.outputs.repo }}/cisco-sdwan-mcp:${{ steps.registry.outputs.version }}"
+            echo '```'
+            echo
+            echo "If this is the first push under a new package name, check the package visibility — GHCR packages start out private."
+          } >> "$GITHUB_STEP_SUMMARY"

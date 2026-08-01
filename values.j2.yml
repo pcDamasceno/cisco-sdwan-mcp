@@ -1,0 +1,78 @@
+---
+# Helm values for the cisco-sdwan-mcp chart, rendered by Styrmin from the
+# deployment Context. See driver.styrmin.yml for the parameters referenced here
+# and deploy/helm/cisco-sdwan-mcp/values.yaml for everything left at its default.
+
+# Required by the driver conventions: Helm otherwise builds resource names from
+# the release name plus the chart name, which overruns the 63-character
+# Kubernetes limit on Styrmin-generated release names.
+fullnameOverride: styrmin-cisco-sdwan-mcp
+
+replicaCount: {{ parameters.replicas }}
+
+image:
+  # The application version the user selected. Published by
+  # .github/workflows/build-push-ghcr.yaml from the matching v-prefixed git tag.
+  tag: "{{ app.version }}"
+
+sdwan:
+  vmanageUrl: {{ parameters.sdwan_vmanage_url | tojson }}
+  username: {{ parameters.sdwan_username | tojson }}
+  # The credential itself never passes through Styrmin: the chart reads it from
+  # this Secret in the deployment namespace.
+  existingSecret: {{ parameters.sdwan_credentials_secret | tojson }}
+  verifySsl: {{ parameters.sdwan_verify_ssl | tojson }}
+  timeout: {{ parameters.sdwan_timeout }}
+  pageSize: {{ parameters.sdwan_page_size }}
+  enableWrites: {{ parameters.sdwan_enable_writes | tojson }}
+
+caBundle:
+  existingConfigMap: {{ parameters.sdwan_ca_bundle_configmap | tojson }}
+  key: {{ parameters.sdwan_ca_bundle_key | tojson }}
+
+mcp:
+  logLevel: {{ parameters.log_level | tojson }}
+  auth:
+    mode: {{ parameters.mcp_auth | tojson }}
+    issuer: {{ parameters.mcp_auth_issuer | tojson }}
+    jwksUri: {{ parameters.mcp_auth_jwks_uri | tojson }}
+    audience: {{ parameters.mcp_auth_audience | tojson }}
+    requiredScopes: {{ parameters.mcp_auth_required_scopes | tojson }}
+
+# Operator-supplied env vars for the `server` component. Rendered under `env:`,
+# so they take precedence over the chart's ConfigMap — this is the escape hatch
+# for auth settings that have no dedicated parameter (see spec.env_vars).
+extraEnv: {{ components | component_env_vars("server") | tojson }}
+
+# Emitted unconditionally: the HelmRelease values are applied as a JSON
+# merge-patch, so an omitted key would leave a previously set override in place
+# and *clearing* one would never propagate. Each filter yields [] when unset,
+# and the chart consumes both under a Helm "with" guard, where an empty list is
+# falsy and the image's own entrypoint applies.
+# (No Jinja delimiters in these comments — Jinja renders the whole file, YAML
+# comments included, and would substitute anything that looks like a tag.)
+command: {{ components | component_command("server") | tojson }}
+args: {{ components | component_args("server") | tojson }}
+
+ingress:
+{%- set mcp_fqdn = services['cisco-sdwan-mcp'].primary_fqdn %}
+{%- set mcp_readable_fqdn = services['cisco-sdwan-mcp'].human_readable_fqdn %}
+{%- if parameters.ingress_enabled and mcp_fqdn %}
+  enabled: true
+  # Plain interpolation, not `| tojson`: Styrmin removes ingress_class from the
+  # rendering context entirely when the environment uses a dedicated ingress
+  # controller, and the resulting undefined would not serialise. Empty here means
+  # the chart omits ingressClassName, which is what annotation-based matching
+  # wants.
+  className: "{{ instance.config.ingress_class }}"
+  host: {{ mcp_fqdn | tojson }}
+  {%- if mcp_readable_fqdn and mcp_readable_fqdn != mcp_fqdn %}
+  extraHosts:
+    - {{ mcp_readable_fqdn | tojson }}
+  {%- endif %}
+{%- else %}
+  # Either the operator opted out, or the cluster has no fqdn_suffix and there
+  # is no hostname to serve on. The Service stays reachable in-cluster either
+  # way, at cisco-sdwan-mcp:8000.
+  enabled: false
+{%- endif %}

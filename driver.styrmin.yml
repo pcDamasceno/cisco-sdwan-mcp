@@ -1,0 +1,268 @@
+---
+# Styrmin Application Driver for the Cisco Catalyst SD-WAN MCP server.
+#
+# Styrmin clones this repository and reads driver.styrmin.yml, values.j2.yml and
+# actions.py from its ROOT — the paths are not configurable per driver, which is
+# why these two files sit next to the source tree rather than under deploy/.
+#
+# Load it with:
+#   styrminctl drivers load-version \
+#     https://github.com/pcDamasceno/cisco_sdwan_mcp.git main
+#
+# See deploy/helm/README.md for the chart this driver deploys and for the
+# credentials Secret that must exist in the deployment namespace.
+apiVersion: "styrmin.io/v1"
+kind: ApplicationDriver
+metadata:
+  name: cisco-sdwan-mcp
+spec:
+  version: "1"
+
+  # Application versions this driver knows how to deploy. The value a user picks
+  # becomes the container image tag, so it must match a tag published by
+  # .github/workflows/build-push-ghcr.yaml — i.e. a git tag of the form v0.1.0.
+  supported_versions: ">=0.1,<1.0"
+  default_version: "0.1.0"
+
+  info:
+    description: >-
+      MCP server for Cisco Catalyst SD-WAN. Exposes a vManage fabric —
+      inventory, real-time device health, alarms and events, path-quality
+      statistics, templates and policies — to AI agents and IDE clients over
+      the Model Context Protocol. Read-only by default.
+    authors: [pcDamasceno]
+    license: MIT
+    links:
+      - link: Github
+        url: 'https://github.com/pcDamasceno/cisco_sdwan_mcp'
+      - link: Documentation
+        url: 'https://github.com/pcDamasceno/cisco_sdwan_mcp#readme'
+
+  helm:
+    main:
+      location: oci://ghcr.io/pcdamasceno/charts/cisco-sdwan-mcp
+      version: "0.1.0"
+
+  components:
+    # `app.kubernetes.io/name` is set from the chart name and is deliberately
+    # independent of `fullnameOverride`, so it stays stable as resource names
+    # change.
+    server:
+      identifier:
+        label:
+          app.kubernetes.io/name: cisco-sdwan-mcp
+
+  services:
+    # Port is the CONTAINER port: Styrmin's service-discovery Service uses this
+    # value for both `port` and `targetPort`, selecting pods by the component
+    # identifier above.
+    - name: cisco-sdwan-mcp
+      kind: http
+      scope: external
+      port: 8000
+      component: server
+
+  parameters:
+    # --- Cisco Catalyst SD-WAN Manager (vManage) ---------------------------
+    - name: sdwan_vmanage_url
+      label: "vManage URL"
+      kind: string
+      # No default => required. Include the port when it is not 443.
+
+    - name: sdwan_username
+      label: "vManage username"
+      kind: string
+      default: automation-readonly
+
+    - name: sdwan_credentials_secret
+      label: "Credentials Secret name"
+      kind: string
+      # A Secret in the deployment namespace carrying SDWAN_PASSWORD. Every key
+      # in it becomes an environment variable, so MCP auth secrets
+      # (MCP_AUTH_CLIENT_SECRET, MCP_AUTH_STATIC_TOKENS, ...) can live there
+      # too. Styrmin has no secret-typed parameter, so the credential is never
+      # held by the driver or the HelmRelease.
+      default: cisco-sdwan-mcp-credentials
+
+    - name: sdwan_verify_ssl
+      label: "Verify the vManage TLS certificate"
+      kind: boolean
+      default: true
+
+    - name: sdwan_ca_bundle_configmap
+      label: "CA bundle ConfigMap (private vManage CA)"
+      kind: string
+      # Empty => use the system trust store. Otherwise the ConfigMap is mounted
+      # read-only and SDWAN_CA_BUNDLE points at the key below. Prefer this over
+      # turning off certificate verification.
+      default: ""
+
+    - name: sdwan_ca_bundle_key
+      label: "CA bundle ConfigMap key"
+      kind: string
+      default: ca.pem
+
+    - name: sdwan_timeout
+      label: "vManage request timeout (seconds)"
+      kind: integer
+      # Real-time endpoints poll the device itself and can be slow on a large
+      # fabric.
+      default: 60
+
+    - name: sdwan_page_size
+      label: "Max records per tool call"
+      kind: integer
+      # Caps how much one broad question can push into the model's context.
+      default: 100
+
+    - name: sdwan_enable_writes
+      label: "Enable configuration-changing tools"
+      kind: boolean
+      # false — the write tools are not registered at all, so the model cannot
+      # see or call them. true — they are registered and each call still needs
+      # explicit user approval. This governs the tool surface, not what the
+      # vManage account may do.
+      default: false
+
+    # --- MCP server --------------------------------------------------------
+    - name: replicas
+      label: "Replicas"
+      kind: integer
+      default: 2
+
+    - name: log_level
+      label: "Log level"
+      kind: enum
+      values: ["DEBUG", "INFO", "WARNING", "ERROR"]
+      default: INFO
+
+    - name: ingress_enabled
+      label: "Expose through the environment ingress"
+      kind: boolean
+      # MCP clients require HTTPS for remote servers; terminate TLS at the
+      # ingress. Turn this off for a cluster-internal-only deployment.
+      default: true
+
+    # --- Authentication of MCP clients to this server ----------------------
+    # Unrelated to the vManage credentials above. Modes needing values not
+    # listed here (client IDs, tenant IDs, AuthKit domains) take them from
+    # per-deployment env vars — see spec.env_vars.
+    - name: mcp_auth
+      label: "Client authentication mode"
+      kind: enum
+      values:
+        - none
+        - static
+        - jwt
+        - introspection
+        - oauth-proxy
+        - github
+        - google
+        - azure
+        - auth0
+        - workos
+      default: none
+
+    - name: mcp_auth_issuer
+      label: "Auth: issuer URL"
+      kind: string
+      default: ""
+
+    - name: mcp_auth_jwks_uri
+      label: "Auth: JWKS URI"
+      kind: string
+      default: ""
+
+    - name: mcp_auth_audience
+      label: "Auth: audience"
+      kind: string
+      default: ""
+
+    - name: mcp_auth_required_scopes
+      label: "Auth: required scopes (comma-separated)"
+      kind: string
+      # Optional for most modes, REQUIRED for azure.
+      default: ""
+
+  # Doc-only: env vars the server respects that have no dedicated parameter.
+  # Set them as per-deployment env vars on the `server` component; they are
+  # rendered under `env:` and therefore override the chart's own ConfigMap.
+  env_vars:
+    - name: MCP_AUTH_CLIENT_ID
+      description: >-
+        OAuth client id, for the introspection / oauth-proxy / github / google
+        modes. The matching MCP_AUTH_CLIENT_SECRET belongs in the credentials
+        Secret, not here.
+      level: component
+      components: [server]
+
+    - name: MCP_AUTH_BASE_URL
+      description: >-
+        Public URL of this server, required by the oauth-proxy / github /
+        google modes to build redirect URIs.
+      level: component
+      components: [server]
+
+    - name: MCP_AUTH_INTROSPECTION_URL
+      description: "RFC 7662 token-introspection endpoint, for the introspection mode."
+      level: component
+      components: [server]
+
+    - name: MCP_AUTH_UPSTREAM_AUTHORIZATION_ENDPOINT
+      description: "Upstream IdP authorization endpoint, for the oauth-proxy mode."
+      level: component
+      components: [server]
+
+    - name: MCP_AUTH_UPSTREAM_TOKEN_ENDPOINT
+      description: "Upstream IdP token endpoint, for the oauth-proxy mode."
+      level: component
+      components: [server]
+
+    - name: MCP_AUTH_PUBLIC_KEY
+      description: >-
+        PEM public key used to verify JWTs, as an alternative to
+        MCP_AUTH_JWKS_URI. Requires MCP_AUTH_ALGORITHM.
+      level: component
+      components: [server]
+
+    - name: MCP_AUTH_ALGORITHM
+      description: "JWT signing algorithm (e.g. RS256), needed only with MCP_AUTH_PUBLIC_KEY."
+      level: component
+      components: [server]
+
+    - name: MCP_AUTH_AZURE_TENANT_ID
+      description: "Microsoft Entra ID tenant, for the azure mode."
+      level: component
+      components: [server]
+
+    - name: MCP_AUTH_AUTH0_CONFIG_URL
+      description: "Auth0 OpenID configuration URL, for the auth0 mode."
+      level: component
+      components: [server]
+
+    - name: MCP_AUTH_AUTHKIT_DOMAIN
+      description: "WorkOS AuthKit domain, for the workos mode."
+      level: component
+      components: [server]
+
+    - name: FASTMCP_STATELESS_HTTP
+      description: >-
+        Defaults to true, which is required with more than one replica: a
+        streamable-HTTP session lives in one pod's memory. Set to false only
+        for a single replica that needs server-initiated messages.
+      level: component
+      components: [server]
+
+  container_overrides:
+    - component: server
+      container: cisco-sdwan-mcp
+      command: true
+      args: true
+      description: >-
+        Override the entrypoint to run the server differently — a one-off
+        debug run, or a maintenance command against the same image and
+        configuration.
+
+  # No actions. The chart plus its configuration covers install, upgrade and
+  # uninstall: the server is stateless, holds no schema, and needs no
+  # migration or seeding step.

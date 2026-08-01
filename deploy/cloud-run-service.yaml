@@ -1,0 +1,84 @@
+# Cloud Run service definition for the Cisco SD-WAN MCP server.
+#
+# Deploy with:
+#   gcloud run services replace deploy/cloud-run-service.yaml --region=REGION
+#
+# Placeholders to replace before deploying:
+#   SERVICE_NAME  – the Cloud Run service name (e.g. cisco-sdwan-mcp)
+#   IMAGE         – full image ref, e.g. ghcr.io/OWNER/REPO:latest
+#   PROJECT_ID    – used by the SDWAN_PASSWORD secret reference below
+#
+# Create the vManage password in Secret Manager first:
+#   echo -n 'the-password' | gcloud secrets create sdwan-password --data-file=-
+#   gcloud secrets add-iam-policy-binding sdwan-password \
+#     --member=serviceAccount:PROJECT_NUMBER-compute@developer.gserviceaccount.com \
+#     --role=roles/secretmanager.secretAccessor
+#
+# Cloud Run pulls PUBLIC ghcr.io images directly. For a PRIVATE package, first
+# create an Artifact Registry remote repository that proxies ghcr.io and point
+# IMAGE at that instead. See deploy/README.md.
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: SERVICE_NAME
+  labels:
+    servicetype: mcp
+  annotations:
+    # "all" exposes the service to the public internet. A server holding
+    # vManage credentials should normally be "internal" or
+    # "internal-and-cloud-load-balancing" — see deploy/README.md.
+    run.googleapis.com/ingress: internal
+spec:
+  template:
+    metadata:
+      annotations:
+        autoscaling.knative.dev/minScale: "0"
+        autoscaling.knative.dev/maxScale: "10"
+    spec:
+      containerConcurrency: 80
+      timeoutSeconds: 300
+      containers:
+        - image: IMAGE
+          ports:
+            # http1 is correct for FastMCP's streamable-HTTP transport.
+            - name: http1
+              containerPort: 8000
+          env:
+            - name: MCP_SERVER_NAME
+              value: cisco-sdwan-mcp
+            - name: MCP_TRANSPORT
+              value: http
+            - name: MCP_HOST
+              value: 0.0.0.0
+            - name: MCP_PORT
+              value: "8000"
+            # --- Cisco Catalyst SD-WAN Manager ---
+            - name: SDWAN_VMANAGE_URL
+              value: https://vmanage.example.com:8443
+            - name: SDWAN_USERNAME
+              value: automation-readonly
+            - name: SDWAN_VERIFY_SSL
+              value: "true"
+            # Read-only unless explicitly changed; see README → Write protection.
+            - name: SDWAN_ENABLE_WRITES
+              value: "false"
+            # Never inline the password — pull it from Secret Manager.
+            - name: SDWAN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: sdwan-password
+                  key: latest
+          resources:
+            limits:
+              cpu: 1000m
+              memory: 512Mi
+          startupProbe:
+            # /healthz is served outside MCP auth, so the probe keeps working
+            # when MCP_AUTH is enabled. It does not call vManage.
+            httpGet:
+              path: /healthz
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3

@@ -1,0 +1,26 @@
+apiVersion: v2
+name: cisco-sdwan-mcp
+description: MCP server exposing a Cisco Catalyst SD-WAN (vManage) fabric to AI agents and IDE clients
+type: application
+
+# Chart version — bump on every chart change. This is what the Styrmin driver
+# pins in `spec.helm.main.version`, so the two move together.
+version: 0.1.0
+
+# Default application version. The Styrmin driver overrides the image tag from
+# the deployment's application version, so this only applies to a plain
+# `helm install` with no `image.tag`.
+appVersion: "0.1.0"
+
+home: https://github.com/pcDamasceno/cisco-sdwan-mcp
+sources:
+  - https://github.com/pcDamasceno/cisco-sdwan-mcp
+keywords:
+  - mcp
+  - model-context-protocol
+  - cisco
+  - sd-wan
+  - vmanage
+  - network-automation
+maintainers:
+  - name: pcDamasceno

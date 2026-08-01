@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# Virtual environments
+.venv/
+venv/
+
+# Tooling caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Environment / secrets
+.env
+deploy/kubernetes/secret.yaml
+
+# Lockfile — a template stays unpinned so new projects start fresh.
+# Remove this line in your own server repo to commit reproducible installs.
+uv.lock
+
+# Corporate CA certificates are environment-specific — keep the directory,
+# ignore its contents. Remove these lines if your CAs should be committed.
+certificates/*
+!certificates/README.md
+!certificates/.gitkeep
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store

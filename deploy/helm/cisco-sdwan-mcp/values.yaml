@@ -1,0 +1,190 @@
+# Default values for cisco-sdwan-mcp.
+#
+# The only value with no working default is `sdwan.vmanageUrl`, and the only
+# thing that must exist outside the chart is the Secret named in
+# `sdwan.existingSecret` — it carries SDWAN_PASSWORD. See README.md.
+
+replicaCount: 2
+
+image:
+  repository: ghcr.io/pcdamasceno/cisco-sdwan-mcp
+  # Defaults to .Chart.AppVersion. Styrmin sets this from the deployment's
+  # application version; prefer an immutable tag over "latest" elsewhere too.
+  tag: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+nameOverride: ""
+# Styrmin drivers must set this (`styrmin-cisco-sdwan-mcp`) so generated
+# resource names stay inside the 63-character Kubernetes limit.
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+# Container entrypoint overrides. Left empty the image's own CMD applies.
+# Emitted by the Styrmin driver unconditionally so that *clearing* an override
+# propagates through the HelmRelease merge-patch; consumed here under a
+# `with` guard, which skips an empty list.
+command: []
+args: []
+
+# ---------------------------------------------------------------------------
+# Cisco Catalyst SD-WAN Manager (vManage)
+# ---------------------------------------------------------------------------
+sdwan:
+  # REQUIRED. Full controller URL including the port when it is not 443.
+  vmanageUrl: ""
+
+  username: automation-readonly
+
+  # Name of a Secret holding SDWAN_PASSWORD. Every key in it is injected as an
+  # environment variable, so the same Secret can also carry MCP auth secrets
+  # (MCP_AUTH_CLIENT_SECRET, MCP_AUTH_STATIC_TOKENS, ...).
+  #
+  # Create it in the release namespace before deploying:
+  #   kubectl create secret generic cisco-sdwan-mcp-credentials \
+  #     --from-literal=SDWAN_PASSWORD='...'
+  #
+  # A pod referencing a missing Secret stays in CreateContainerConfigError
+  # rather than starting up half-configured — the intended failure mode.
+  existingSecret: cisco-sdwan-mcp-credentials
+
+  # Development escape hatch. When `existingSecret` is empty and this is set,
+  # the chart renders its own Secret from this value. It then lives in the
+  # release's Helm values in plain text — do not use it in production.
+  password: ""
+
+  # Leave verification on. For a controller with a private CA, point
+  # `caBundle.existingConfigMap` at the CA instead of disabling this.
+  verifySsl: true
+
+  timeout: 60
+  pageSize: 100
+
+  # false — configuration-changing tools are not registered at all, so the
+  #   model cannot see or call them. The server is read-only.
+  # true  — attach_device_template, activate_vsmart_policy and get_task_status
+  #   are registered; each still requires explicit user approval per call.
+  # This governs the tool surface, not what the vManage account may do — pair
+  # it with an account that holds only the privileges you intend to grant.
+  enableWrites: false
+
+# Private CA for the vManage controller. When `existingConfigMap` is set the
+# ConfigMap is mounted read-only and SDWAN_CA_BUNDLE points at `<mountPath>/<key>`.
+caBundle:
+  existingConfigMap: ""
+  key: ca.pem
+  mountPath: /etc/sdwan-ca
+
+# ---------------------------------------------------------------------------
+# MCP server
+# ---------------------------------------------------------------------------
+mcp:
+  serverName: cisco-sdwan-mcp
+  port: 8000
+  logLevel: INFO
+
+  # Required whenever replicaCount > 1. A streamable-HTTP session lives in one
+  # pod's memory, so a client that initializes against pod A and is then
+  # load-balanced to pod B gets "Session not found" (HTTP 404) on roughly half
+  # its calls. Stateless mode handles each request independently.
+  #
+  # The trade-off: no GET/SSE stream, so the server cannot push notifications
+  # or sampling requests. Every tool here is request/response, so nothing is
+  # lost today.
+  statelessHttp: true
+
+  # Authentication of MCP *clients* to this server. Unrelated to
+  # sdwan.username/password, which authenticate this server to vManage.
+  # Modes: none | static | jwt | introspection | oauth-proxy |
+  #        github | google | azure | auth0 | workos
+  auth:
+    mode: none
+    # Only the fields your mode needs. Anything not covered here can be set
+    # through `extraEnv` (or, under Styrmin, per-deployment env vars).
+    issuer: ""
+    jwksUri: ""
+    audience: ""
+    # Comma-separated. Optional for most modes, REQUIRED for azure.
+    requiredScopes: ""
+    # Public URL of THIS server — needed by oauth-proxy / github / google.
+    baseUrl: ""
+
+# Extra environment variables, as a [{name, value}] list. These are set under
+# `env:` rather than `envFrom:`, so they override anything the chart's own
+# ConfigMap sets. Styrmin feeds per-deployment env vars in here.
+extraEnv: []
+
+service:
+  type: ClusterIP
+  # Kept equal to mcp.port so there is one port number to reason about. Styrmin's
+  # own service-discovery Service uses the driver's declared port for both `port`
+  # and `targetPort`, so a different value here would mean two ports for the same
+  # endpoint.
+  port: 8000
+
+ingress:
+  enabled: false
+  className: ""
+  # Streamable HTTP uses long-lived responses — disable proxy buffering and
+  # raise read timeouts. Annotation names below are ingress-nginx's; adjust for
+  # your controller.
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+  host: ""
+  # Additional hostnames served by the same Ingress.
+  extraHosts: []
+  path: /
+  pathType: Prefix
+  tls: []
+  #  - hosts: [mcp.example.com]
+  #    secretName: cisco-sdwan-mcp-tls
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: "1"
+    memory: 512Mi
+
+# /healthz is served outside MCP auth, so probes keep working with auth
+# enabled. It does not call vManage: the server stays live and reports
+# controller problems per tool call rather than crash-looping while a
+# controller is briefly unreachable.
+startupProbe:
+  periodSeconds: 2
+  failureThreshold: 15
+readinessProbe:
+  periodSeconds: 10
+livenessProbe:
+  periodSeconds: 20
+
+podLabels: {}
+podAnnotations: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  # Matches the numeric USER in the Dockerfile. Stated explicitly so the pod
+  # also runs on a cluster whose policy rejects an image-supplied user, and so
+  # runAsNonRoot has a UID it can verify.
+  runAsUser: 10001
+  runAsGroup: 10001
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: ["ALL"]
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+topologySpreadConstraints: []

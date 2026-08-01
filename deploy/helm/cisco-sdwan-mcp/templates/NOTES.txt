@@ -1,0 +1,31 @@
+{{ .Chart.Name }} {{ .Chart.Version }} — release {{ .Release.Name }} in namespace {{ .Release.Namespace }}.
+
+The MCP endpoint is served at /mcp.
+
+In-cluster:
+  http://{{ include "cisco-sdwan-mcp.fullname" . }}.{{ .Release.Namespace }}.svc:{{ .Values.service.port }}/mcp
+{{- if and .Values.ingress.enabled .Values.ingress.host }}
+
+Ingress:
+  https://{{ .Values.ingress.host }}/mcp
+{{- end }}
+
+Write tools are {{ if .Values.sdwan.enableWrites }}ENABLED — attach_device_template, activate_vsmart_policy and get_task_status are registered{{ else }}disabled; the server is read-only{{ end }}.
+
+{{ if not .Values.sdwan.vmanageUrl -}}
+WARNING: sdwan.vmanageUrl is empty. The server starts and answers /healthz, but
+every tool call will report that vManage is not configured.
+{{ end -}}
+{{ if and (not .Values.sdwan.existingSecret) (not .Values.sdwan.password) -}}
+WARNING: no vManage password source. Set sdwan.existingSecret to a Secret
+carrying SDWAN_PASSWORD (preferred), or sdwan.password for a dev install.
+{{ else if .Values.sdwan.existingSecret -}}
+Reading SDWAN_PASSWORD from Secret {{ .Values.sdwan.existingSecret | quote }}. If it does
+not exist in this namespace the pods stay in CreateContainerConfigError:
+
+  kubectl -n {{ .Release.Namespace }} create secret generic {{ .Values.sdwan.existingSecret }} \
+    --from-literal=SDWAN_PASSWORD='...'
+{{ else -}}
+WARNING: sdwan.password is stored in this release's Helm values in plain text.
+Use sdwan.existingSecret outside development.
+{{ end -}}

@@ -1,0 +1,44 @@
+{{- /*
+Non-sensitive runtime configuration. SDWAN_PASSWORD and any auth client
+secrets come from the Secret named by `sdwan.existingSecret` instead.
+*/ -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "cisco-sdwan-mcp.fullname" . }}-config
+  labels:
+    {{- include "cisco-sdwan-mcp.labels" . | nindent 4 }}
+data:
+  MCP_SERVER_NAME: {{ .Values.mcp.serverName | quote }}
+  MCP_TRANSPORT: "http"
+  MCP_HOST: "0.0.0.0"
+  MCP_PORT: {{ .Values.mcp.port | quote }}
+  LOG_LEVEL: {{ .Values.mcp.logLevel | quote }}
+  FASTMCP_STATELESS_HTTP: {{ .Values.mcp.statelessHttp | quote }}
+
+  SDWAN_VMANAGE_URL: {{ .Values.sdwan.vmanageUrl | quote }}
+  SDWAN_USERNAME: {{ .Values.sdwan.username | quote }}
+  SDWAN_VERIFY_SSL: {{ .Values.sdwan.verifySsl | quote }}
+  SDWAN_TIMEOUT: {{ .Values.sdwan.timeout | quote }}
+  SDWAN_PAGE_SIZE: {{ .Values.sdwan.pageSize | quote }}
+  SDWAN_ENABLE_WRITES: {{ .Values.sdwan.enableWrites | quote }}
+  {{- if .Values.caBundle.existingConfigMap }}
+  SDWAN_CA_BUNDLE: {{ printf "%s/%s" (trimSuffix "/" .Values.caBundle.mountPath) .Values.caBundle.key | quote }}
+  {{- end }}
+
+  MCP_AUTH: {{ .Values.mcp.auth.mode | quote }}
+  {{- with .Values.mcp.auth.issuer }}
+  MCP_AUTH_ISSUER: {{ . | quote }}
+  {{- end }}
+  {{- with .Values.mcp.auth.jwksUri }}
+  MCP_AUTH_JWKS_URI: {{ . | quote }}
+  {{- end }}
+  {{- with .Values.mcp.auth.audience }}
+  MCP_AUTH_AUDIENCE: {{ . | quote }}
+  {{- end }}
+  {{- with .Values.mcp.auth.requiredScopes }}
+  MCP_AUTH_REQUIRED_SCOPES: {{ . | quote }}
+  {{- end }}
+  {{- with .Values.mcp.auth.baseUrl }}
+  MCP_AUTH_BASE_URL: {{ . | quote }}
+  {{- end }}

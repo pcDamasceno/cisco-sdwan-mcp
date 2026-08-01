@@ -1,0 +1,123 @@
+name: Publish to PyPI and the MCP Registry
+
+# Tag a release to publish:  git tag v0.1.0 && git push origin v0.1.0
+#
+# PyPI upload uses trusted publishing (OIDC) — no API token. One-time setup at
+# https://pypi.org/manage/account/publishing/, adding a pending publisher for
+# project `cisco-sdwan-mcp`, owner `pcDamasceno`, repo `cisco-sdwan-mcp`,
+# workflow `release.yml`, environment `pypi`.
+#
+# The registry proves PyPI ownership by finding the `mcp-name:` marker in
+# README.md, which becomes the PyPI long description. Do not remove it.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  pypi:
+    name: Publish to PyPI
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write # trusted publishing
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Check the tag matches the project version
+        run: |
+          TAG=${GITHUB_REF#refs/tags/v}
+          VERSION=$(uv version --short)
+          if [ "$GITHUB_REF" != "${GITHUB_REF#refs/tags/}" ] && [ "$TAG" != "$VERSION" ]; then
+            echo "Tag v$TAG does not match pyproject version $VERSION" >&2
+            exit 1
+          fi
+
+      - name: Run tests
+        run: uv run --extra dev pytest -q
+
+      - name: Build
+        run: uv build
+
+      # uv drops a .gitignore into dist/; the publish action treats everything
+      # in dist/ as a distribution and newer versions reject the stray file.
+      - name: Clean non-distribution files out of dist/
+        run: rm -f dist/.gitignore
+
+      # The name below must match the "PyPI Project Name" of the trusted
+      # publisher exactly, or the upload fails with "Non-user identities cannot
+      # create new projects". Printing it makes that mismatch obvious in the log.
+      - name: Show the project name being published
+        run: |
+          uv run --with twine --no-project twine check dist/*
+          python -c "
+          import glob, zipfile
+          w = sorted(glob.glob('dist/*.whl'))[-1]
+          z = zipfile.ZipFile(w)
+          meta = next(n for n in z.namelist() if n.endswith('METADATA'))
+          for line in z.read(meta).decode().splitlines():
+              if line.startswith(('Name:', 'Version:')):
+                  print('::notice::' + line)
+          "
+
+      # Auth falls back automatically: if the PYPI_API_TOKEN secret is set, the
+      # action uses it; if it is empty or absent, it uses trusted publishing.
+      #
+      # PyPI refuses to let a trusted publisher create a project that does not
+      # exist yet unless a *pending* publisher matches it exactly. Set the
+      # secret for the first release to create the project under your own
+      # account, then delete the secret — every later release goes back to
+      # trusted publishing with no workflow change.
+      - name: Publish
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          password: ${{ secrets.PYPI_API_TOKEN }}
+          # Attestations require trusted publishing; they cannot be signed with
+          # an API token, so only ask for them when no token is set.
+          attestations: ${{ secrets.PYPI_API_TOKEN == '' }}
+
+  mcp-registry:
+    name: Publish to the MCP Registry
+    needs: pypi
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write # OIDC, proves the io.github.pcDamasceno/* namespace
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install mcp-publisher
+        run: |
+          curl -L "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" | tar xz mcp-publisher
+
+      - name: Sync server.json version to the tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/v}
+          jq --arg v "$VERSION" '.version = $v | .packages[0].version = $v' server.json > server.tmp
+          mv server.tmp server.json
+
+      - name: Wait for the release to appear on PyPI
+        run: |
+          VERSION=$(jq -r .version server.json)
+          for i in $(seq 1 30); do
+            if curl -sf "https://pypi.org/pypi/cisco-sdwan-mcp/$VERSION/json" > /dev/null; then
+              echo "cisco-sdwan-mcp $VERSION is on PyPI"
+              exit 0
+            fi
+            echo "waiting for cisco-sdwan-mcp $VERSION on PyPI ($i/30)"
+            sleep 10
+          done
+          echo "Timed out waiting for PyPI" >&2
+          exit 1
+
+      - name: Authenticate
+        run: ./mcp-publisher login github-oidc
+
+      - name: Publish
+        run: ./mcp-publisher publish

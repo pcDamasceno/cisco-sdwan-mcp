@@ -1,0 +1,50 @@
+# Regression fixture for the chart <-> Styrmin driver contract.
+#
+# This is what ../../../../values.j2.yml renders to for a deployment with every
+# knob exercised. CI templates the chart against it, so a chart change that
+# breaks a value the driver sets fails here rather than at deploy time.
+# Keep it in sync with values.j2.yml.
+fullnameOverride: styrmin-cisco-sdwan-mcp
+
+replicaCount: 3
+
+image:
+  tag: "0.1.0"
+
+sdwan:
+  vmanageUrl: "https://vmanage.lab.example.com:8443"
+  username: "automation-readonly"
+  existingSecret: "cisco-sdwan-mcp-credentials"
+  verifySsl: true
+  timeout: 60
+  pageSize: 100
+  enableWrites: true
+
+caBundle:
+  existingConfigMap: "sdwan-ca"
+  key: "ca.pem"
+
+mcp:
+  logLevel: "DEBUG"
+  auth:
+    mode: "jwt"
+    issuer: "https://idp.example.com/realms/main"
+    jwksUri: "https://idp.example.com/realms/main/protocol/openid-connect/certs"
+    audience: "cisco-sdwan-mcp"
+    requiredScopes: ""
+
+extraEnv:
+  - name: MCP_AUTH_CLIENT_ID
+    value: mcp-server
+
+# The driver always emits these two keys, empty when the operator has set no
+# override — the chart must treat an empty list as "use the image default".
+command: []
+args: []
+
+ingress:
+  enabled: true
+  className: "nginx"
+  host: "cisco-sdwan-mcp-3f2a1b4c.apps.example.com"
+  extraHosts:
+    - "cisco-sdwan-mcp-prod.apps.example.com"

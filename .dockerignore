@@ -1,0 +1,36 @@
+# Keep the build context small and avoid baking local state into the image.
+.git/
+.github/
+.gitignore
+
+# Virtual environments — never copy a host venv into the image
+.venv/
+venv/
+
+# Python caches
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# Tooling caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Not needed at runtime
+tests/
+scripts/
+deploy/
+# Styrmin driver — read from a git clone of this repo, never from the image
+driver.styrmin.yml
+values.j2.yml
+compose.yaml
+.env
+.env.example
+.vscode/
+.idea/
+.DS_Store

@@ -1,0 +1,85 @@
+# Kubernetes Deployment for the Cisco SD-WAN MCP server.
+#
+# Replace IMAGE with your published image, e.g. ghcr.io/OWNER/REPO:sha-1a2b3c4
+# (prefer immutable tags over :latest). Apply the whole directory with:
+#   kubectl apply -k deploy/kubernetes
+#
+# Create the Secret holding SDWAN_PASSWORD first — see secret.example.yaml.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mcp-server
+  labels:
+    app.kubernetes.io/name: mcp-server
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: mcp-server
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: mcp-server
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        # Matches the numeric USER in the Dockerfile. Stated explicitly so the
+        # pod also runs on a cluster whose policy rejects an image-supplied
+        # user, and so runAsNonRoot has a UID it can verify.
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: mcp-server
+          image: IMAGE
+          ports:
+            - name: http
+              containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: mcp-server-config
+            # Required: supplies SDWAN_PASSWORD (and any MCP_AUTH secrets).
+            - secretRef:
+                name: mcp-server-secrets
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+          # /healthz is served outside MCP auth, so probes work with MCP_AUTH
+          # enabled. It does not call vManage: the server stays live and
+          # reports controller problems per tool call rather than crash-looping
+          # when vManage is briefly unreachable.
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 2
+            failureThreshold: 15
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 20
+          # A controller with a private CA: mount it and set SDWAN_CA_BUNDLE.
+          # volumeMounts:
+          #   - name: sdwan-ca
+          #     mountPath: /etc/sdwan-ca
+          #     readOnly: true
+      # volumes:
+      #   - name: sdwan-ca
+      #     configMap:
+      #       name: sdwan-ca

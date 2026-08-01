@@ -1,0 +1,34 @@
+# Ingress exposing the MCP server at https://mcp.example.com/mcp.
+# Replace the host, and configure TLS for any real deployment — MCP clients
+# require HTTPS for remote servers, and OAuth flows will not work without it.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: mcp-server
+  annotations:
+    # Streamable HTTP uses long-lived SSE responses — disable proxy buffering
+    # and raise read timeouts (annotation names vary by ingress controller;
+    # these are for ingress-nginx).
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    # cert-manager.io/cluster-issuer: letsencrypt-prod
+spec:
+  # Name your controller's IngressClass. Without it the Ingress is served only
+  # if a default IngressClass exists (or the controller was started with
+  # --watch-ingress-without-class); otherwise it is silently ignored and the
+  # host never resolves to this Service.
+  ingressClassName: nginx
+  # tls:
+  #   - hosts: [mcp.example.com]
+  #     secretName: mcp-server-tls
+  rules:
+    - host: mcp.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: mcp-server
+                port:
+                  name: http

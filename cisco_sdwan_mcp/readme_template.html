@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{{ title }}</title>
+    <style>
+        :root {
+            color-scheme: light dark;
+            font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            line-height: 1.55;
+            color: #1f2937;
+            background: #f7f8fa;
+        }
+
+        body {
+            margin: 0;
+            padding: 32px 18px;
+        }
+
+        main {
+            max-width: 920px;
+            margin: 0 auto;
+            padding: 32px;
+            background: #ffffff;
+            border: 1px solid #d8dee4;
+            border-radius: 8px;
+        }
+
+        h1,
+        h2,
+        h3 {
+            line-height: 1.25;
+            color: #111827;
+        }
+
+        a {
+            color: #0969da;
+        }
+
+        code {
+            padding: 0.15em 0.35em;
+            border-radius: 4px;
+            background: #eef2f7;
+            font-size: 0.9em;
+        }
+
+        pre {
+            overflow-x: auto;
+            padding: 16px;
+            border-radius: 8px;
+            background: #0f172a;
+            color: #e5e7eb;
+        }
+
+        pre code {
+            padding: 0;
+            background: transparent;
+            color: inherit;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            display: block;
+            overflow-x: auto;
+        }
+
+        th,
+        td {
+            padding: 8px 10px;
+            border: 1px solid #d8dee4;
+            text-align: left;
+        }
+
+        blockquote {
+            margin-left: 0;
+            padding-left: 16px;
+            border-left: 4px solid #d8dee4;
+            color: #4b5563;
+        }
+
+        @media (prefers-color-scheme: dark) {
+            :root {
+                color: #d1d5db;
+                background: #0b1020;
+            }
+
+            main {
+                background: #111827;
+                border-color: #374151;
+            }
+
+            h1,
+            h2,
+            h3 {
+                color: #f9fafb;
+            }
+
+            a {
+                color: #7cb7ff;
+            }
+
+            code {
+                background: #1f2937;
+            }
+
+            th,
+            td {
+                border-color: #374151;
+            }
+
+            blockquote {
+                border-color: #4b5563;
+                color: #9ca3af;
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <main>
+        {{ body }}
+    </main>
+    <!-- Keep README client examples aligned with the browser-facing deployment URL. -->
+    <script>
+        (() => {
+            const localOrigin = "{{ local_origin }}";
+            const publicOrigin = window.location.origin;
+            if (!publicOrigin || publicOrigin === localOrigin) {
+                return;
+            }
+
+            const replaceLocalOrigin = (value) => value.replaceAll(localOrigin, publicOrigin);
+
+            const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+            const textNodes = [];
+            while (walker.nextNode()) {
+                textNodes.push(walker.currentNode);
+            }
+
+            for (const node of textNodes) {
+                if (node.nodeValue.includes(localOrigin)) {
+                    node.nodeValue = replaceLocalOrigin(node.nodeValue);
+                }
+            }
+
+            for (const element of document.querySelectorAll("[href]")) {
+                const href = element.getAttribute("href");
+                if (href?.includes(localOrigin)) {
+                    element.setAttribute("href", replaceLocalOrigin(href));
+                }
+            }
+        })();
+    </script>
+</body>
+
+</html>

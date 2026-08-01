@@ -1,0 +1,40 @@
+{{- if .Values.ingress.enabled }}
+{{- $fullName := include "cisco-sdwan-mcp.fullname" . -}}
+{{- $svcPort := .Values.service.port -}}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ $fullName }}
+  labels:
+    {{- include "cisco-sdwan-mcp.labels" . | nindent 4 }}
+  {{- with .Values.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with .Values.ingress.className }}
+  # Without an IngressClass the Ingress is served only if a default one exists
+  # (or the controller runs with --watch-ingress-without-class); otherwise it
+  # is silently ignored and the host never resolves to this Service.
+  ingressClassName: {{ . }}
+  {{- end }}
+  {{- with .Values.ingress.tls }}
+  tls:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  rules:
+    {{- range concat (list .Values.ingress.host) .Values.ingress.extraHosts }}
+    {{- if . }}
+    - host: {{ . | quote }}
+      http:
+        paths:
+          - path: {{ $.Values.ingress.path }}
+            pathType: {{ $.Values.ingress.pathType }}
+            backend:
+              service:
+                name: {{ $fullName }}
+                port:
+                  number: {{ $svcPort }}
+    {{- end }}
+    {{- end }}
+{{- end }}
